@@ -96,6 +96,7 @@ def main(argv=None) -> int:
     ap.add_argument("--install-autostart", action="store_true", help="start the agent at login (Windows, Linux, macOS)")
     ap.add_argument("--remove-autostart", action="store_true", help="undo --install-autostart")
     ap.add_argument("--autostart-args", default="", metavar="ARGS", help='extra agent arguments for autostart, e.g. "--tensorboard ~/runs"')
+    ap.add_argument("--force-autostart", action="store_true", help="install autostart even inside an ssh session")
     ap.add_argument("--dry-run", action="store_true", help="with --install/--remove-autostart: show what would be done")
     ap.add_argument("--log", metavar="FILE", help="append output to FILE instead of the console")
     ap.add_argument("--install-claude-statusline", action="store_true", help="enable Claude 5h/weekly limits (edits Claude's settings.json, with backup)")
@@ -107,7 +108,7 @@ def main(argv=None) -> int:
         sys.stdout = sys.stderr = open(log_path, "a", buffering=1, encoding="utf-8")
     if args.install_autostart or args.remove_autostart:
         from . import autostart
-        return autostart.run(remove=args.remove_autostart, dry_run=args.dry_run, extra_args=args.autostart_args)
+        return autostart.run(remove=args.remove_autostart, dry_run=args.dry_run, extra_args=args.autostart_args, force=args.force_autostart)
     if args.install_claude_statusline or args.remove_claude_statusline:
         return install_statusline(claude_home(), remove=args.remove_claude_statusline)
     collectors = load_collectors()

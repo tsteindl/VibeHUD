@@ -122,7 +122,13 @@ def _macos(r: _Runner, remove: bool, extra: str) -> int:
     r.run(["launchctl", "bootout", target, str(plist_path)], check=False)    # replace a previous version
     return r.run(["launchctl", "bootstrap", target, str(plist_path)])
 
-def run(remove: bool = False, dry_run: bool = False, extra_args: str = "") -> int:
+def run(remove: bool = False, dry_run: bool = False, extra_args: str = "", force: bool = False) -> int:
+    if not remove and not force and (os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_TTY")):
+        print("This looks like an ssh session. Autostart belongs only on the computer the board is plugged into\n"
+              "(your laptop), not on a remote machine you ssh into: the remote is read over ssh and needs no service.\n"
+              "Run this command in a terminal on the laptop itself. To install here anyway, add --force-autostart.",
+              file=sys.stderr)
+        return 1
     r = _Runner(dry_run)
     print(("Removing" if remove else "Installing") + " VibeHUD autostart" + (" (dry run, nothing changed)" if dry_run else ""))
     if sys.platform == "win32":
