@@ -124,7 +124,7 @@ void drawDino(const Telemetry &s,uint32_t now) {
     for (int y=0;y<18;++y) for (int x=0;x<16;++x) {
         bool on=runningSprite[y][x]=='#';
         if (y>=15 && frame) { on = (y==15 && (x==6 || x==9)) || (y==16 && (x==5 || x==6 || x==9)) || (y==17 && (x==9 || x==10)); }
-        if (sleeping || state==RunState::Stalled) {
+        if (sleeping || state==RunState::Stalled || state==RunState::Queued) {
             // A low, curled resting silhouette; the footer centres it vertically.
             int yy=y+(mode==LayoutMode::Training?0:4);
             on=(yy>=10 && yy<=15 && x>=3 && x<=12) || (yy>=8 && yy<=12 && x>=10 && x<=15) || (yy==14 && x>=0 && x<=3);
@@ -143,7 +143,7 @@ void drawDino(const Telemetry &s,uint32_t now) {
         for(int sy=0;sy<scale;++sy) for(int sx=0;sx<scale;++sx)
             dinoBuffer[(y*scale+sy+lift)*width+x*scale+sx]=fg;
     lv_obj_invalidate(dinoCanvas);
-    lv_label_set_text(dinoMark,sleeping||state==RunState::Stalled?"z":state==RunState::Error?"!":state==RunState::Completed?"+":"");
+    lv_label_set_text(dinoMark,sleeping||state==RunState::Stalled||state==RunState::Queued?"z":state==RunState::Error?"!":state==RunState::Completed?"+":"");
 }
 void build(const Telemetry &s,uint32_t now) {
     auto *screen=lv_scr_act(); lv_obj_clean(screen);
@@ -242,7 +242,8 @@ void uiTick(const Telemetry &s,uint32_t now) {
     const unsigned runIdx=uiRun(s);
     const auto &r=s.runs[runIdx];
     bool stale=isStale(r,now);
-    uint32_t ink=r.state==RunState::Error?COLORS[2]:stale?COLORS[1]:FG;
+    const bool queued=r.state==RunState::Queued;
+    uint32_t ink=r.state==RunState::Error?COLORS[2]:stale?COLORS[1]:queued?DIM:FG;
     if(s.runCount>1) snprintf(buf,sizeof(buf),"%u/%u %s",runIdx+1,unsigned(s.runCount),r.name); else snprintf(buf,sizeof(buf),"%s",r.name);
     setText(runName,buf);
     color(bar,ink);
@@ -250,8 +251,17 @@ void uiTick(const Telemetry &s,uint32_t now) {
     // Unknown progress shows an empty bar and "--%": no indeterminate animation.
     setWidth(bar,r.hasProgress?std::max(1,int((BAR_W-4)*progress)):1);
     snprintf(buf,sizeof(buf),"%d%%",int(progress*100));
-    setText(percent,r.state==RunState::Error?"ERROR":r.state==RunState::Completed?"DONE":stale?"STALE":r.hasProgress?buf:"--%");
+    setText(percent,r.state==RunState::Error?"ERROR":r.state==RunState::Completed?"DONE":queued?"QUEUED":stale?"STALE":r.hasProgress?buf:"--%");
     lv_obj_set_style_text_color(percent,lv_color_hex(ink),0);
+    if(queued) {
+        // A planned run has no metrics: show its place in the queue and clear everything else.
+        unsigned position=0;
+        for(unsigned i=0;i<=runIdx;++i) if(s.runs[i].state==RunState::Queued) ++position;
+        if(position==1) snprintf(buf,sizeof(buf),"next up"); else snprintf(buf,sizeof(buf),"#%u in queue",position);
+        setText(metrics,buf); setText(gpu,""); setText(lossLabel,""); setText(valLabel,""); setText(accLabel,"");
+        lv_obj_add_flag(spark,LV_OBJ_FLAG_HIDDEN); lv_obj_add_flag(sparkVal,LV_OBJ_FLAG_HIDDEN); sparkRun=-1;
+        return;
+    }
     char rate[20]="--",eta[20]="--",loss[20]="--",util[20]="--",vram[32]="";
     bool live=!stale && r.state==RunState::Running;
     if(r.hasRate && live) snprintf(rate,sizeof(rate),"%.1f",r.rate);

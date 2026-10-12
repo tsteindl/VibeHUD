@@ -8,6 +8,9 @@
     root = "~/runs"                # searched recursively for events.out.tfevents.* files
     total_steps = 10000            # optional: enables progress % and ETA
 
+    [[queue]]                      # planned runs: one per line, name first (see queue.py)
+    file = "~/spectral-tirex/queue/jobs.txt"
+
     [[remote]]                     # another machine, over your normal ssh (see remote.py)
     host = "hpc-login"             # a name from ~/.ssh/config, or user@host
     label = "hpc"                  # shown on screen as "Claude (hpc)"
@@ -28,6 +31,7 @@ except ImportError:                     # Python < 3.11
         tomllib = None
 from pathlib import Path
 from .claude import ClaudeCollector, default_home as claude_home
+from .queue import QueueCollector, DEFAULT_DIR
 from .remote import RemoteCollector
 from .tensorboard import TensorBoardCollector
 from .codex import CodexCollector, default_home as codex_home
@@ -45,6 +49,8 @@ def load_collectors(path: Path | None = None):
     collectors += [CodexCollector(Path(e["home"]).expanduser(), e.get("label"), e.get("max_age_hours", 12))
                    for e in cfg.get("codex", [])]
     collectors += [TensorBoardCollector([e["root"]], e.get("total_steps")) for e in cfg.get("tensorboard", [])]
+    if DEFAULT_DIR.is_dir() or cfg.get("queue"):
+        collectors.append(QueueCollector([DEFAULT_DIR] + [e["file"] for e in cfg.get("queue", [])]))
     collectors += [RemoteCollector(e["host"], e.get("label"), e.get("python", "python3"), e.get("args", ""),
                                    e.get("interval", 15.0)) for e in cfg.get("remote", [])]
     if not any(isinstance(c, (ClaudeCollector, CodexCollector)) for c in collectors):

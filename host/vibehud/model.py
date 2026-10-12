@@ -4,8 +4,9 @@ import unicodedata
 from dataclasses import asdict, dataclass, field
 
 WORKING, NEEDS_USER, IDLE = 0, 1, 2
-RUNNING, STALLED, DONE, FAILED = 0, 1, 2, 3
+RUNNING, STALLED, DONE, FAILED, QUEUED = 0, 1, 2, 3, 4
 MAX_SESSIONS, MAX_RUNS, MAX_LOSS = 8, 4, 48
+WIRE_STATES = 3     # the firmware knows run states 0..3; QUEUED is sent as FAILED with a "QUEUED " name prefix
 
 @dataclass
 class Session:
@@ -70,6 +71,16 @@ def ascii_text(text: str, limit: int) -> str:
 def _num(value, fmt="{:g}") -> str:
     return "-" if value is None else fmt.format(value)
 
+def select_runs(runs: list[Run], slots: int = MAX_RUNS) -> list[Run]:
+    """What fits on the board, one page per run: running first, then queued, then finished.
+    Queued runs leave room for the latest finished one, so a long queue does not hide it."""
+    active = [r for r in runs if r.state in (RUNNING, STALLED)][:slots]
+    queued = [r for r in runs if r.state == QUEUED]
+    done = [r for r in runs if r.state in (DONE, FAILED)]
+    room = slots - len(active)
+    queued = queued[:room - min(len(done), 1 if room > 1 else 0)]
+    return active + queued + done[:room - len(queued)]
+
 def encode(snapshot: Snapshot) -> bytes:
     lines = ["VH1 BEGIN"]
     for s in snapshot.sessions[:MAX_SESSIONS]:
@@ -77,10 +88,11 @@ def encode(snapshot: Snapshot) -> bytes:
                                 str(s.status), ascii_text(s.title, 95)]))
     for key, limit in (("h", snapshot.hourly), ("w", snapshot.weekly)):
         lines.append("\t".join(["LIMIT", key, _num(limit.used_pct, "{:.1f}"), _num(limit.reset_s, "{:d}")]))
-    for r in snapshot.runs[:MAX_RUNS]:
+    for r in select_runs(snapshot.runs):
+        state, name = (r.state, r.name) if r.state <= WIRE_STATES else (FAILED, f"QUEUED {r.name}")
         def series(points):
             return ",".join(f"{int(x)}:{v:.4g}" for x, v in points[-MAX_LOSS:]) or "-"
-        lines.append("\t".join(["RUN", ascii_text(r.id, 15), ascii_text(r.name, 39), str(r.state),
+        lines.append("\t".join(["RUN", ascii_text(r.id, 15), ascii_text(name, 39), str(state),
                                 _num(r.progress, "{:.4f}"), _num(r.rate, "{:.2f}"), _num(r.eta_s, "{:d}"),
                                 _num(r.gpu, "{:.0f}"), _num(r.vram_used, "{:.1f}"), _num(r.vram_total, "{:.1f}"), series(r.loss), series(r.val_loss), _num(r.val_acc, "{:.2f}")]))
     lines.append("END")

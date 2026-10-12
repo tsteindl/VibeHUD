@@ -195,9 +195,9 @@ class TensorBoardCollector:
                     tracked.add(tag, (step, wall, value))
             if not tracked.series:
                 continue
-            runs.append(self._to_run(directory, mtime, tracked, now))
-        runs.sort(key=lambda r: (r.state != RUNNING, r.id))
-        return runs
+            runs.append((mtime, self._to_run(directory, mtime, tracked, now)))
+        runs.sort(key=lambda t: (t[1].state != RUNNING, -t[0]))      # running first, then the most recently active
+        return [run for _, run in runs]
 
     def _to_run(self, directory: Path, mtime: float, tracked: _Tracked, now: float) -> Run:
         training = {t: v for t, v in tracked.series.items() if not t.startswith("vibehud/")}
@@ -223,6 +223,9 @@ class TensorBoardCollector:
             name = directory.name
         if name in ("", "."):
             name = directory.name
+        parts = name.split("/")
+        if len(parts) > 1 and parts[-1].lower() in ("tb", "tensorboard"):
+            name = "/".join(parts[:-1])                      # <run>/tb: the run is the folder above
         run = Run(id=f"{zlib.crc32(str(directory).encode()):08x}", name=f"{name} s{step}", state=state, rate=rate)
         if total:
             run.progress = min(1.0, step / total)

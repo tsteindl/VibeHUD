@@ -5,7 +5,7 @@
 //   VH1 BEGIN
 //   SESSION <provider> <profile> <status 0 working|1 needs you|2 idle> <title>
 //   LIMIT   <h|w> <used pct | -> <reset seconds | ->
-//   RUN     <id> <name> <state 0 run|1 stalled|2 done|3 error> <progress 0..1|-> <rate|-> <eta s|->
+//   RUN     <id> <name> <state 0 run|1 stalled|2 done|3 error|4 queued> <progress 0..1|-> <rate|-> <eta s|->
 //           <gpu %|-> <vram used GB|-> <vram total GB|-> <loss,loss,... (oldest first)|->
 //   END
 //

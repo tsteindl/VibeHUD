@@ -3,15 +3,22 @@ import argparse, json, shutil, sys, time
 from pathlib import Path
 from .config import load_collectors
 from .claude import default_home as claude_home
-from .model import Limit, Snapshot, encode, snapshot_to_json, MAX_SESSIONS, MAX_RUNS
+import dataclasses
+from .model import Limit, Snapshot, encode, snapshot_to_json, MAX_SESSIONS, RUNNING, STALLED, DONE, FAILED, QUEUED
+from .queue import QueueCollector
 from .tensorboard import TensorBoardCollector
+
+RUN_ORDER = {RUNNING: 0, STALLED: 1, QUEUED: 2, DONE: 3, FAILED: 3}   # board page order
 
 def gather(collectors) -> Snapshot:
     snap = Snapshot()
+    multi = sum(hasattr(c, "runs") for c in collectors) > 1       # name the machine only when there are several
     for c in collectors:
         try:
             sessions, (hourly, weekly) = c.collect()
             runs = c.runs() if hasattr(c, "runs") else []
+            if multi and getattr(c, "label", None):
+                runs = [dataclasses.replace(r, name=f"{c.label}: {r.name}") for r in runs]
         except Exception as e:                       # one broken source must not blank the display
             print(f"[vibehud] {type(c).__name__} failed: {e}", file=sys.stderr)
             continue
@@ -25,14 +32,13 @@ def gather(collectors) -> Snapshot:
     # Needs-you first (it is waiting on a human), then working, then idle; newest first within each.
     snap.sessions.sort(key=lambda s: ({1: 0, 0: 1, 2: 2}[s.status], -s.updated))
     snap.sessions = snap.sessions[:MAX_SESSIONS]
-    snap.runs.sort(key=lambda r: r.state)            # running first
-    snap.runs = snap.runs[:MAX_RUNS]
+    snap.runs.sort(key=lambda r: RUN_ORDER[r.state])  # running, queued, finished; encode() picks what fits the board
     return snap
 
 def describe(snap: Snapshot) -> str:
     names = {0: "working", 1: "needs you", 2: "idle"}
     out = [f"  {s.provider} ({s.profile}) [{names[s.status]}] {s.title}" for s in snap.sessions] or ["  (no recent sessions)"]
-    states = {0: "running", 1: "stalled", 2: "done", 3: "error"}
+    states = {0: "running", 1: "stalled", 2: "done", 3: "error", 4: "queued"}
     for r in snap.runs:
         gpu = f" gpu {r.gpu:.0f}% vram {r.vram_used:.1f}/{r.vram_total:.0f}G" if r.gpu is not None and r.vram_used is not None else ""
         out.append(f"  run {r.name} [{states[r.state]}] " + (f"{r.progress:.0%} " if r.progress is not None else "")
@@ -90,6 +96,8 @@ def main(argv=None) -> int:
     ap.add_argument("--interval", type=float, default=1.0, help="seconds between snapshots")
     ap.add_argument("--tensorboard", action="append", default=[], metavar="DIR",
                     help="also watch TensorBoard logs under DIR (repeatable)")
+    ap.add_argument("--queue", action="append", default=[], metavar="FILE",
+                    help="also list planned runs from FILE (one run per line, name first; repeatable; ~/.vibehud/queue/ is always read)")
     ap.add_argument("--total-steps", type=int, help="total training steps for --tensorboard runs (enables progress and ETA)")
     ap.add_argument("--once", action="store_true", help="print one snapshot and exit (no device needed)")
     ap.add_argument("--json", action="store_true", help="print this machine's snapshot as JSON and exit (used for remote machines)")
@@ -112,6 +120,8 @@ def main(argv=None) -> int:
         return install_statusline(claude_home(), remove=args.remove_claude_statusline)
     collectors = load_collectors()
     collectors += [TensorBoardCollector([d], args.total_steps) for d in args.tensorboard]
+    if args.queue:
+        collectors.append(QueueCollector(args.queue))
     if args.json or args.once:
         if any(hasattr(c, "last_error") for c in collectors):
             time.sleep(8)                            # give remote threads a moment to fetch

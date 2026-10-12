@@ -66,8 +66,9 @@ void loop() {
             if(command=='h') run.state=RunState::Stalled;
             if(command=='d') run.state=RunState::Completed;
             if(command=='e') run.state=RunState::Error;
+            if(command=='q') run.state=RunState::Queued;
         }
-        if(command=='o') { demo=!demo; if(demo) mockInit(telemetry,now); else telemetry={}; }
+        if(command=='o') { demo=!demo; if(demo) mockInit(telemetry,now); else memset(&telemetry,0,sizeof(telemetry)); }
         if(command=='c') capture();
         if(command=='x') capturePanel();
         if(uint32_t(now-lastUi)>=100) { uiTick(telemetry,now);lastUi=now; }
