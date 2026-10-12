@@ -5,7 +5,7 @@ from dataclasses import asdict, dataclass, field
 
 WORKING, NEEDS_USER, IDLE = 0, 1, 2
 RUNNING, STALLED, DONE, FAILED, QUEUED = 0, 1, 2, 3, 4
-MAX_SESSIONS, MAX_RUNS, MAX_LOSS = 8, 4, 48
+MAX_SESSIONS, MAX_RUNS, MAX_LOSS = 8, 24, 48
 WIRE_STATES = 3     # the firmware knows run states 0..3; QUEUED is sent as FAILED with a "QUEUED " name prefix
 
 @dataclass
