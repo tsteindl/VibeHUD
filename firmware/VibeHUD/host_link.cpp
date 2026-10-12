@@ -32,7 +32,7 @@ void setLimit(Limit &l, char **f, int n) {
 }
 }
 void HostLink::handleLine(char *text, Telemetry &live, uint32_t now) {
-    if (!strcmp(text, "VH1 BEGIN")) { stage = {}; stage.linked = true; return; }
+    if (!strcmp(text, "VH1 BEGIN")) { memset(&stage, 0, sizeof(stage)); stage.linked = true; return; }   // not `= {}`: that may build a 15 KB temporary on the loop stack
     if (!stage.linked) return;   // ignore lines outside BEGIN..END
     char *f[MaxFields]; int n = split(text, f);
     if (!strcmp(f[0], "SESSION") && n >= 5 && stage.sessionCount < 8) {
@@ -42,10 +42,10 @@ void HostLink::handleLine(char *text, Telemetry &live, uint32_t now) {
         copy(s.title, sizeof(s.title), f[4]);
     } else if (!strcmp(f[0], "LIMIT") && n >= 3) {
         if (f[1][0] == 'h') setLimit(stage.hourly, f, n); else if (f[1][0] == 'w') setLimit(stage.weekly, f, n);
-    } else if (!strcmp(f[0], "RUN") && n >= 11 && stage.runCount < 4) {
+    } else if (!strcmp(f[0], "RUN") && n >= 11 && stage.runCount < MaxRuns) {
         TrainingRun &r = stage.runs[stage.runCount++];
         r = {}; copy(r.id, sizeof(r.id), f[1]); copy(r.name, sizeof(r.name), f[2]);
-        r.state = RunState(constrain(atoi(f[3]), 0, 3));
+        r.state = RunState(constrain(atoi(f[3]), 0, 4));
         if (!unknown(f[4])) { r.hasProgress = true; r.progress = strtof(f[4], nullptr); }
         if (!unknown(f[5])) { r.hasRate = true; r.rate = strtof(f[5], nullptr); }
         if (!unknown(f[6])) { r.hasEta = true; r.etaSeconds = strtoul(f[6], nullptr, 10); }
@@ -79,7 +79,7 @@ char HostLink::feed(int c, Telemetry &live, uint32_t now) {
 }
 bool HostLink::expire(Telemetry &live, uint32_t now, uint32_t timeoutMs) {
     if (!live.linked || !everLinked || uint32_t(now - lastSnapshotMs) < timeoutMs) return false;
-    live = {};   // linked=false: the UI shows "waiting for host"
+    memset(&live, 0, sizeof(live));   // linked=false: the UI shows "waiting for host"
     everLinked = false;
     return true;
 }

@@ -1,5 +1,6 @@
 #include "telemetry.h"
 #include <math.h>
+#include <string.h>
 namespace {
 uint32_t stepOf[4], pushedAt[4];
 float curve(uint32_t step, int run) {
@@ -21,7 +22,7 @@ void fillHistory(TrainingRun &r, int run, uint32_t step) {
 }
 }
 void mockInit(Telemetry &s, uint32_t now) {
-    s = {};
+    memset(&s, 0, sizeof(s));   // not `= {}`: avoids a large temporary on the stack
     s.linked = true;
     const AgentSession sessions[] = {
         {"research", "Claude", "W", "time series model auto-research loop", SessionStatus::Working},
@@ -35,14 +36,16 @@ void mockInit(Telemetry &s, uint32_t now) {
     };
     s.sessionCount = sizeof(sessions)/sizeof(sessions[0]);
     for (size_t i=0; i<s.sessionCount; ++i) s.sessions[i] = sessions[i];
-    s.runCount = 3;
-    // Run 0: everything present. Run 1: no progress/ETA/VRAM (unknown total). Run 2: finished.
+    s.runCount = 4;
+    // Run 0: everything present. Run 1: no progress/ETA/VRAM (unknown total). Run 2: finished. Run 3: queued.
     s.runs[0] = {"train-01", "time-series / run 042", RunState::Running,
         true,true,true,true,true,true, .63f,14.2f,.382f,96.f,12.8f,16.f,8040,now};
     s.runs[1] = {"train-02", "vision / run 017", RunState::Running,
         false,true,false,true,true,false, 0.f,6.8f,.9f,88.f,0.f,0.f,0,now};
     s.runs[2] = {"train-03", "tabular / run 009", RunState::Completed,
         true,true,true,true,true,true, 1.f,0.f,.121f,4.f,1.1f,16.f,0,now};
+    s.runs[3] = {"queue-01", "ft_s1_ctrl_seed0", RunState::Queued,
+        false,false,false,false,false,false, 0.f,0.f,0.f,0.f,0.f,0.f,0,now};
     fillHistory(s.runs[0], 0, 70);
     fillHistory(s.runs[1], 1, 110);
     fillHistory(s.runs[2], 2, 240);

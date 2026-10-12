@@ -1,4 +1,4 @@
-"""Claude Code collector. Reads <CLAUDE_CONFIG_DIR or ~/.claude> only; never writes or sends anything.
+"""Claude Code collector. Reads <CLAUDE_CONFIG_DIR or ~/.claude>; its only writes/requests are the limits poll below.
 
 Sources (verified against Claude Code 2.1.29x on Windows, VS Code extension and terminal):
   sessions/<pid>.json           one file per LIVE session, removed on exit: sessionId, cwd, name,
@@ -11,10 +11,12 @@ Sources (verified against Claude Code 2.1.29x on Windows, VS Code extension and 
   ../.claude.json (oauthAccount.emailAddress)  account email, used only for the default label.
 Claude's 5 h / weekly limits are not in these files. They come from the status-line hook
 (`vibehud --install-claude-statusline`, see claude_statusline.py), which stores them in
-<config dir>/vibehud-limits.json; without the hook this collector reports no limits.
+<config dir>/vibehud-limits.json. The VS Code extension never runs that hook, so the collector also
+polls the same usage endpoint Claude Code itself uses (api.anthropic.com/api/oauth/usage, with the OAuth
+token in <config dir>/.credentials.json, sent to that host only) and writes the same file.
 """
 from __future__ import annotations
-import json, os, time
+import json, os, time, urllib.request
 from pathlib import Path
 from .model import Session, Limit, WORKING, NEEDS_USER, IDLE
 from .claude_statusline import limits_path
@@ -22,6 +24,8 @@ from .claude_statusline import limits_path
 TAIL_BYTES = 512 * 1024
 HEAD_BYTES = 128 * 1024
 STALE_AFTER = 12 * 3600          # a session file this old with no updates is ignored
+USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+POLL_EVERY = 180                 # seconds between usage requests (also the retry delay after a failure)
 
 def default_home() -> Path:
     return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
@@ -91,6 +95,7 @@ class ClaudeCollector:
         self.label = label
         self._transcripts: dict[str, Path | None] = {}
         self._titles: dict[Path, tuple[float, int, str | None]] = {}
+        self._next_poll = 0.0
 
     def _transcript(self, session_id: str) -> Path | None:
         path = self._transcripts.get(session_id)
@@ -130,7 +135,36 @@ class ClaudeCollector:
             sessions.append(Session("Claude", self.label, title, _map_status(d.get("status")), updated))
         return sessions, self._limits(now)
 
+    def _poll_usage(self, now: float) -> None:
+        """Refresh vibehud-limits.json from the usage endpoint unless the hook or an earlier poll did recently."""
+        if now < self._next_poll:
+            return
+        self._next_poll = now + POLL_EVERY
+        target = limits_path(self.home)
+        try:
+            if now - target.stat().st_mtime < POLL_EVERY:
+                return
+        except OSError:
+            pass
+        try:
+            oauth = json.loads((self.home / ".credentials.json").read_text("utf-8"))["claudeAiOauth"]
+            if oauth["expiresAt"] / 1000 <= now:
+                return                     # Claude Code refreshes the token itself; wait for it
+            req = urllib.request.Request(USAGE_URL, headers={
+                "Authorization": f"Bearer {oauth['accessToken']}", "anthropic-beta": "oauth-2025-04-20",
+                "User-Agent": "vibehud"})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                usage = json.load(r)
+            windows = {key: {"used_percentage": usage[key]["utilization"], "resets_at": usage[key]["resets_at"]}
+                       for key in ("five_hour", "seven_day")}
+            tmp = target.with_suffix(".tmp")
+            tmp.write_text(json.dumps({"updated": now, "rate_limits": windows}), "utf-8")
+            os.replace(tmp, target)
+        except (OSError, ValueError, KeyError, TypeError):
+            pass                           # keep whatever the file already says
+
     def _limits(self, now: float) -> tuple[Limit, Limit]:
+        self._poll_usage(now)
         try:
             rate_limits = json.loads(limits_path(self.home).read_text("utf-8"))["rate_limits"]
         except (OSError, ValueError, KeyError):

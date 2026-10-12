@@ -13,7 +13,7 @@ imported when a board is attached). On Linux/macOS the SSH connection is multipl
 no multiplexing, so key-based login (or an agent) is needed there.
 """
 from __future__ import annotations
-import shlex, subprocess, sys, threading, time
+import dataclasses, shlex, subprocess, sys, threading, time
 from ._proc import NO_WINDOW
 from .model import Limit, Run, Session, Snapshot, snapshot_from_json
 
@@ -71,7 +71,5 @@ class RemoteCollector:
         snap = self._current()
         if not snap:
             return []
-        for r in snap.runs:
-            r.name = f"{self.label}: {r.name}"
-            r.id = f"{self.label}-{r.id}"
-        return snap.runs
+        # Copies: the cached snapshot is read every tick, so editing it in place would stack the prefix.
+        return [dataclasses.replace(r, id=f"{self.label}-{r.id}") for r in snap.runs]

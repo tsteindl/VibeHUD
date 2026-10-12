@@ -7,8 +7,10 @@ struct AgentSession {
     char id[16], provider[16], profile[8], title[96];
     SessionStatus status;
 };
-enum class RunState { Running, Stalled, Completed, Error };
+enum class RunState { Running, Stalled, Completed, Error, Queued };   // Queued: planned, not started yet
 constexpr size_t LossHistory = 48;
+// One page per run. A TrainingRun is ~600 bytes and two Telemetry copies exist (live + receive stage).
+constexpr size_t MaxRuns = 24;
 // A curve sampled onto a shared x axis (0..LossHistory-1) so series logged at different rates
 // (train loss every step, validation loss every epoch) can be drawn in one plot.
 struct LossSeries {
@@ -37,7 +39,7 @@ struct Telemetry {
     bool linked;   // a host (or the demo source) is supplying data
     AgentSession sessions[8];
     size_t sessionCount;
-    TrainingRun runs[4];
+    TrainingRun runs[MaxRuns];
     size_t runCount;
     Limit hourly, weekly;
 };
