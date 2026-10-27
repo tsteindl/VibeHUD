@@ -157,6 +157,12 @@ void buildList(lv_obj_t *screen) {
     const int y0=gpuPage?GPU_Y:LIST_Y, rows=gpuPage?GPU_ROWS:LIST_ROWS;
     // Overview: state mark, name, status, ETA, loss. GPU: VRAM, type, user, command.
     const int xs[2][4]={{30,530,620,720},{12,100,130,290}}, ws[2][4]={{480,80,90,90},{80,20,150,518}};
+    if(!gpuPage) {
+        // Column headings share the top line with the summary; the page number moves into the summary.
+        lv_obj_add_flag(pageLabel,LV_OBJ_FLAG_HIDDEN);
+        const char *headings[]={"STATE","ETA","LOSS"};
+        for(int c=1;c<4;++c) label(screen,xs[0][c],12,headings[c-1],F_SMALL,DIM);
+    }
     for(int i=0;i<LIST_ROWS;++i) {
         for(int c=0;c<4;++c) cells[i][c]=nullptr;
         marks[i]=nullptr;
@@ -185,7 +191,10 @@ void tickOverview(const Telemetry &s,unsigned pg,uint32_t now) {
         ++counts[r.state==RunState::Running||r.state==RunState::Stalled?0:r.state==RunState::Queued?1:2];
     }
     char buf[64];
-    snprintf(buf,sizeof(buf),"RUNS   %u active   %u queued   %u finished",counts[0],counts[1],counts[2]);
+    const unsigned pages=uiPageCount(s);
+    int n=snprintf(buf,sizeof(buf),"RUNS");
+    if(pages>1) n+=snprintf(buf+n,sizeof(buf)-n," %u/%u",pg+1,pages);
+    snprintf(buf+n,sizeof(buf)-n,"   %u active   %u queued   %u done",counts[0],counts[1],counts[2]);
     setText(header,s.runCount?buf:"RUNS   none");
     for(int i=0;i<LIST_ROWS;++i) {
         size_t idx=pg*LIST_ROWS+i;
