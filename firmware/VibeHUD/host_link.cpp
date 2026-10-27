@@ -59,6 +59,17 @@ void HostLink::handleLine(char *text, Telemetry &live, uint32_t now) {
         if (n >= 12 && !unknown(f[11])) parseSeries(f[11], r.val);
         if (n >= 13 && !unknown(f[12])) { r.hasAcc = true; r.acc = strtof(f[12], nullptr); }
         r.lastUpdateMs = now;
+    } else if (!strcmp(f[0], "GPU") && n >= 6 && stage.gpuCount < MaxGpus) {
+        GpuInfo &g = stage.gpus[stage.gpuCount++];
+        g = {}; copy(g.machine, sizeof(g.machine), f[1]); copy(g.name, sizeof(g.name), f[2]);
+        if (!unknown(f[3])) { g.hasUtil = true; g.util = strtof(f[3], nullptr); }
+        if (!unknown(f[4]) && !unknown(f[5])) { g.hasVram = true; g.used = strtof(f[4], nullptr); g.total = strtof(f[5], nullptr); }
+    } else if (!strcmp(f[0], "PROC") && n >= 6 && stage.procCount < MaxProcs) {
+        GpuProc &p = stage.procs[stage.procCount++];
+        p = {}; p.gpu = uint8_t(atoi(f[1])); p.type = f[2][0];
+        if (!unknown(f[3])) { p.hasUsed = true; p.used = strtof(f[3], nullptr); }
+        if (!unknown(f[4])) copy(p.user, sizeof(p.user), f[4]);
+        copy(p.command, sizeof(p.command), f[5]);
     } else if (!strcmp(f[0], "END")) {
         live = stage; stage.linked = false;
         lastSnapshotMs = now; everLinked = true;

@@ -68,13 +68,21 @@ runs = ["~/runs"]               # that machine's log folders (default)
 
 Needs key-based ssh (no password prompt) and `python3` ≥ 3.9 on the remote; nothing else. The agent
 sends its code through ssh and runs it from memory; it reads that machine's runs, queue, Claude/Codex
-sessions and GPU, and stops when the connection ends. On a cluster, GPU data is only available where the
+sessions and GPUs, and stops when the connection ends. Its only write: Claude's usage limits are
+fetched with that machine's Claude login and cached in `~/.claude/vibehud-limits.json` (on macOS the
+login is in the Keychain, so a Mac shows limits only via `--install-claude-statusline`). On a cluster, GPU data is only available where the
 agent runs on a GPU node, so a login node shows no GPU line. Check the cluster allows a light, long-running
 process on login nodes.
 
 ## Board controls
 
-Short BOOT press: next page (one page per run). Hold 900 ms: toggle the 5-row sessions view.
+Short BOOT press: next page. Hold 900 ms: cycle the views
+1. **default**: sessions, limits and one page per run;
+2. **run overview**: one line per run (state, progress, ETA, loss), 12 per page;
+3. **GPU**: one page per GPU, its VRAM/utilisation and every process using it (graphics ones too,
+   e.g. `gnome-shell`), with user and command line.
+
+The RST button is a hardware reset, not an input.
 Dino: running, resting `z` (stalled), `...` (queued), `!` (error), `+` (done).
 
 ## Repo layout and development

@@ -7,6 +7,8 @@
 //   LIMIT   <h|w> <used pct | -> <reset seconds | ->
 //   RUN     <id> <name> <state 0 run|1 stalled|2 done|3 error|4 queued> <progress 0..1|-> <rate|-> <eta s|->
 //           <gpu %|-> <vram used GB|-> <vram total GB|-> <loss,loss,... (oldest first)|->
+//   GPU     <machine> <name> <util %|-> <vram used GB|-> <vram total GB|->
+//   PROC    <gpu index> <C|G> <vram GB|-> <user|-> <command>
 //   END
 //
 // Fields are separated by TAB. A snapshot only replaces the live data on END, so a

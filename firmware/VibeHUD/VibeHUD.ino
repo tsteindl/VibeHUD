@@ -53,13 +53,17 @@ void loop() {
             uiNextPage(telemetry,now);Serial.printf("PAGE %u/%u source=%s\n",uiPage(),uiPageCount(telemetry),command=='p'?"serial":"BOOT");
         }
         if(event==ButtonEvent::NextMode || command=='m') {
-            // Long press: toggle the 5-row sessions view, or return to automatic layout.
-            if(uiForced()) uiAuto(telemetry,now); else setMode(LayoutMode::FullSessions,now);
+            // Long press cycles: automatic layout -> run overview -> GPUs -> automatic layout.
+            if(!uiForced()) setMode(LayoutMode::Overview,now);
+            else if(uiMode()==LayoutMode::Overview) setMode(LayoutMode::Gpu,now);
+            else uiAuto(telemetry,now);
         }
         if(command=='a') uiAuto(telemetry,now);
         if(command=='t') setMode(LayoutMode::Training,now);
         if(command=='s') setMode(LayoutMode::SleepingFooter,now);
         if(command=='f') setMode(LayoutMode::FullSessions,now);
+        if(command=='v') setMode(LayoutMode::Overview,now);
+        if(command=='g') setMode(LayoutMode::Gpu,now);
         if(telemetry.runCount) {
             auto &run=telemetry.runs[uiRun(telemetry)];
             if(command=='r') run.state=RunState::Running;

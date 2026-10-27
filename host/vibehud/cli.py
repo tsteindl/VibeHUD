@@ -15,6 +15,7 @@ def gather(collectors) -> Snapshot:
         try:
             sessions, (hourly, weekly) = c.collect()
             runs = c.runs() if hasattr(c, "runs") else []
+            gpus = c.gpus() if hasattr(c, "gpus") else []
             if multi and getattr(c, "label", None):
                 runs = [dataclasses.replace(r, name=f"{c.label}: {r.name}") for r in runs]
         except Exception as e:                       # one broken source must not blank the display
@@ -22,6 +23,7 @@ def gather(collectors) -> Snapshot:
             continue
         snap.sessions += sessions
         snap.runs += runs
+        snap.gpus += gpus
         # Several accounts: show the most used window, which is the one that will bite first.
         for attr, new in (("hourly", hourly), ("weekly", weekly)):
             cur: Limit = getattr(snap, attr)
@@ -41,6 +43,9 @@ def describe(snap: Snapshot) -> str:
         gpu = f" gpu {r.gpu:.0f}% vram {r.vram_used:.1f}/{r.vram_total:.0f}G" if r.gpu is not None and r.vram_used is not None else ""
         out.append(f"  run {r.name} [{states[r.state]}] " + (f"{r.progress:.0%} " if r.progress is not None else "")
                    + (f"{r.rate:.1f}/s " if r.rate else "") + (f"loss {r.loss[-1][1]:.3f}" if r.loss else "") + (f" val {r.val_loss[-1][1]:.3f}" if r.val_loss else "") + gpu)
+    for g in snap.gpus:
+        out.append(f"  gpu {g.machine or 'local'}: {g.name} {g.util}% {g.used}/{g.total} GB")
+        out += [f"    {used or 0:.2f} GB {kind} {user} {command}" for kind, user, command, used in g.procs]
     for key, l in (("5h", snap.hourly), ("week", snap.weekly)):
         if l.used_pct is None:
             out.append(f"  limit {key}: unknown")

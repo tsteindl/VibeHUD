@@ -2,8 +2,9 @@
 
 Claude Code / Codex / training jobs that run on another computer leave their files THERE. Nothing is
 installed on that machine: over plain `ssh` (your keys and ~/.ssh/config) the agent starts the remote's own
-`python3` (3.9+) and sends it VibeHUD's source code on stdin, which runs from memory and touches no file. That
-process reads the remote's runs, queue, sessions and GPU and prints one JSON snapshot every few seconds; it
+`python3` (3.9+) and sends it VibeHUD's source code on stdin, which runs from memory (its only write is
+Claude's usage-limit cache, ~/.claude/vibehud-limits.json, see claude.py). That
+process reads the remote's runs, queue, sessions and GPUs and prints one JSON snapshot every few seconds; it
 ends when the ssh connection ends, so nothing is left behind.
 
 If the connection drops (a laptop waking from sleep, say) the process exits and is started again.
@@ -12,7 +13,7 @@ from __future__ import annotations
 import base64, dataclasses, subprocess, sys, threading, time, zlib
 from pathlib import Path
 from ._proc import NO_WINDOW
-from .model import Limit, Run, Session, Snapshot, snapshot_from_json, snapshot_to_json
+from .model import Gpu, Limit, Run, Session, Snapshot, snapshot_from_json, snapshot_to_json
 
 INTERVAL = 5.0          # seconds between snapshots from the remote
 MAX_AGE = 60.0          # a snapshot older than this is not shown
@@ -41,7 +42,7 @@ def serve(runs, interval: float = INTERVAL):
     from .cli import gather
     from .config import local_collectors
     threading.Thread(target=lambda: (sys.stdin.read(), os._exit(0)), daemon=True).start()   # EOF = laptop is gone
-    collectors = local_collectors(runs, remote=True)
+    collectors = local_collectors(runs)
     while True:
         try:
             print(snapshot_to_json(gather(collectors)), flush=True)
@@ -111,6 +112,10 @@ class RemoteCollector:
         for s in snap.sessions:
             s.profile = self.label                      # the screen shows where it runs: "Claude (hpc)"
         return snap.sessions, (snap.hourly, snap.weekly)
+
+    def gpus(self) -> list[Gpu]:
+        snap = self._current()
+        return [dataclasses.replace(g, machine=self.label) for g in snap.gpus] if snap else []
 
     def runs(self, now: float | None = None) -> list[Run]:
         snap = self._current()

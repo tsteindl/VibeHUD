@@ -149,15 +149,9 @@ def to_bins(points, lo_step: int, hi_step: int, bins: int = MAX_LOSS) -> list[li
 
 class TensorBoardCollector:
     def __init__(self, roots, recent_hours: float = RECENT_HOURS):
-        self._gpu_cache: tuple[float, tuple | None] = (0.0, None)
         self.roots = [Path(r).expanduser() for r in roots]
         self.recent = recent_hours * 3600
         self._files: dict[Path, _Tracked] = {}
-
-    def _local_gpu(self, now: float):
-        if now - self._gpu_cache[0] > 3:               # nvidia-smi is a subprocess: sample every few seconds
-            self._gpu_cache = (now, gpu.sample())
-        return self._gpu_cache[1]
 
     def _event_files(self, now: float):
         newest: dict[Path, tuple[float, Path]] = {}      # one run per directory: its newest file
@@ -233,7 +227,7 @@ class TensorBoardCollector:
             if rate and state == RUNNING:
                 run.eta_s = int(max(0, total - step) / rate)
         if state == RUNNING:
-            reading = self._local_gpu(now)         # this machine's GPU, device-wide: not only this run's share
+            reading = gpu.sample()         # this machine's GPU, device-wide: not only this run's share
             if reading:
                 run.gpu, run.vram_used, run.vram_total = reading
         accuracy = [t for t in training if "acc" in t.lower() and any(w in t.lower() for w in VAL_WORDS)]

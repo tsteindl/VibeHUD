@@ -22,6 +22,7 @@ except ImportError:                     # Python < 3.11
 from pathlib import Path
 from .claude import ClaudeCollector, default_home as claude_home
 from .codex import CodexCollector, default_home as codex_home
+from .gpu import GpuCollector
 from .queue import QueueCollector, DEFAULT_DIR
 from .remote import RemoteCollector
 from .tensorboard import TensorBoardCollector
@@ -31,11 +32,11 @@ DEFAULT_RUNS = ["~/runs"]
 def config_path() -> Path:
     return Path.home() / ".vibehud" / "config.toml"
 
-def local_collectors(runs, remote: bool = False):
-    """Everything this computer can report. On a remote the agent only reads: no Claude usage polling."""
-    collectors = [TensorBoardCollector(runs), QueueCollector([DEFAULT_DIR])]
+def local_collectors(runs):
+    """Everything this computer can report, the same on this computer and on a remote."""
+    collectors = [TensorBoardCollector(runs), QueueCollector([DEFAULT_DIR]), GpuCollector()]
     if (claude_home() / "sessions").is_dir():
-        collectors.append(ClaudeCollector(poll_usage=not remote))
+        collectors.append(ClaudeCollector())
     if (codex_home() / "sessions").is_dir():
         collectors.append(CodexCollector())
     return collectors

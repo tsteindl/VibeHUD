@@ -1,6 +1,7 @@
 #pragma once
 #include "telemetry.h"
-enum class LayoutMode { Training, SleepingFooter, FullSessions };
+// Overview: one line per run. Gpu: one page per GPU with the processes using it.
+enum class LayoutMode { Training, SleepingFooter, FullSessions, Overview, Gpu };
 void uiInit(const Telemetry &s, uint32_t now);
 void uiTick(const Telemetry &s, uint32_t now);
 // One page index drives both lists: session page N and training run N advance together.

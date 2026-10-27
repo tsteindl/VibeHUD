@@ -21,6 +21,9 @@ unsigned page=0;
 uint32_t slowAt=0;
 lv_obj_t *titles[5], *lights[5][3], *pageLabel, *bar, *percent, *metrics, *gpu, *runName, *lossLabel, *valLabel, *accLabel, *spark, *sparkVal;
 lv_obj_t *dinoCanvas, *dinoMark, *limitFill[2], *limitText[2];
+// Overview and GPU pages: a header and a table of small-font rows.
+constexpr int LIST_ROWS=12, LIST_Y=40, LIST_ROW_H=23, GPU_ROWS=10, GPU_Y=72, VRAM_W=560;
+lv_obj_t *header, *cells[LIST_ROWS][4], *marks[LIST_ROWS], *vramFill, *vramText;
 lv_color_t dinoBuffer[64*78];
 lv_point_t sparkPoints[LossHistory], sparkValPoints[LossHistory];
 int limitBarW=90, lightState[5];
@@ -33,6 +36,7 @@ const char *runningSprite[]={
     "###..########...", "#############.#.", ".###########....", "..##########....",
     "...########.....", "....######......", ".....##.##......", ".....##..##.....",
     ".....###.###....", "................"};
+bool listMode(LayoutMode m) { return m==LayoutMode::Overview || m==LayoutMode::Gpu; }
 unsigned rowsFor(LayoutMode m) { return m==LayoutMode::Training?3:5; }
 unsigned sessionPages(const Telemetry &s) { return std::max(1u,(unsigned(s.sessionCount)+rowsFor(mode)-1)/rowsFor(mode)); }
 lv_obj_t *rect(lv_obj_t *parent,int x,int y,int w,int h,uint32_t color) {
@@ -145,11 +149,104 @@ void drawDino(const Telemetry &s,uint32_t now) {
     lv_obj_invalidate(dinoCanvas);
     lv_label_set_text(dinoMark,sleeping||state==RunState::Stalled?"z":state==RunState::Queued?"...":state==RunState::Error?"!":state==RunState::Completed?"+":"");
 }
+void buildList(lv_obj_t *screen) {
+    header=label(screen,12,8,"",F_LIMIT);
+    pageLabel=label(screen,744,10,"",F_SMALL,DIM);
+    rect(screen,12,34,796,1,LINE);
+    const bool gpuPage=mode==LayoutMode::Gpu;
+    const int y0=gpuPage?GPU_Y:LIST_Y, rows=gpuPage?GPU_ROWS:LIST_ROWS;
+    // Overview: state mark, name, status, ETA, loss. GPU: VRAM, type, user, command.
+    const int xs[2][4]={{30,530,620,720},{12,100,130,290}}, ws[2][4]={{480,80,90,90},{80,20,150,518}};
+    for(int i=0;i<LIST_ROWS;++i) {
+        for(int c=0;c<4;++c) cells[i][c]=nullptr;
+        marks[i]=nullptr;
+        if(i>=rows) continue;
+        int y=y0+i*LIST_ROW_H;
+        if(!gpuPage) marks[i]=rect(screen,12,y+5,10,10,DIM);
+        for(int c=0;c<4;++c) {
+            cells[i][c]=label(screen,xs[gpuPage][c],y,"",F_SMALL,c==0||(gpuPage&&c==3)?FG:DIM);
+            lv_obj_set_size(cells[i][c],ws[gpuPage][c],lv_font_get_line_height(F_SMALL)); lv_label_set_long_mode(cells[i][c],LV_LABEL_LONG_DOT);
+        }
+    }
+    vramFill=vramText=nullptr;
+    if(gpuPage) {
+        rect(screen,12,44,VRAM_W,14,LINE); vramFill=rect(screen,14,46,1,10,FG);
+        vramText=label(screen,VRAM_W+28,40,"",F_SMALL);
+    }
+}
+uint32_t stateInk(const TrainingRun &r,uint32_t now) {
+    return r.state==RunState::Error?COLORS[2]:isStale(r,now)?COLORS[1]:r.state==RunState::Queued?DIM:
+           r.state==RunState::Completed?FG:COLORS[0];
+}
+void tickOverview(const Telemetry &s,unsigned pg,uint32_t now) {
+    unsigned counts[3]={0,0,0};   // running, queued, finished
+    for(size_t i=0;i<s.runCount;++i) {
+        const auto &r=s.runs[i];
+        ++counts[r.state==RunState::Running||r.state==RunState::Stalled?0:r.state==RunState::Queued?1:2];
+    }
+    char buf[64];
+    snprintf(buf,sizeof(buf),"RUNS   %u active   %u queued   %u finished",counts[0],counts[1],counts[2]);
+    setText(header,s.runCount?buf:"RUNS   none");
+    for(int i=0;i<LIST_ROWS;++i) {
+        size_t idx=pg*LIST_ROWS+i;
+        if(idx>=s.runCount) { for(int c=0;c<4;++c) setText(cells[i][c],""); lv_obj_add_flag(marks[i],LV_OBJ_FLAG_HIDDEN); continue; }
+        const auto &r=s.runs[idx];
+        bool stale=isStale(r,now), live=!stale && r.state==RunState::Running;
+        lv_obj_clear_flag(marks[i],LV_OBJ_FLAG_HIDDEN); color(marks[i],stateInk(r,now));
+        setText(cells[i][0],r.name);
+        snprintf(buf,sizeof(buf),"%d%%",int(std::max(0.f,std::min(1.f,r.progress))*100));
+        setText(cells[i][1],r.state==RunState::Error?"ERROR":r.state==RunState::Completed?"DONE":
+                r.state==RunState::Queued?"QUEUED":stale?"STALE":r.hasProgress?buf:"--%");
+        if(live && r.hasEta) formatDuration(r.etaSeconds,buf,sizeof(buf)); else buf[0]=0;
+        setText(cells[i][2],buf);
+        if(r.hasLoss) snprintf(buf,sizeof(buf),"%.3f",r.loss); else buf[0]=0;
+        setText(cells[i][3],buf);
+    }
+}
+void tickGpu(const Telemetry &s,unsigned pg) {
+    char buf[96];
+    if(!s.gpuCount) {
+        setText(header,"GPU   no data (no nvidia-smi on any machine)"); setText(vramText,""); setWidth(vramFill,1);
+        for(int i=0;i<GPU_ROWS;++i) for(int c=0;c<4;++c) setText(cells[i][c],"");
+        return;
+    }
+    const auto &g=s.gpus[pg%s.gpuCount];
+    snprintf(buf,sizeof(buf),"%s   %s",g.machine[0]?g.machine:"local",g.name); setText(header,buf);
+    float frac=g.hasVram&&g.total>0?std::min(1.f,g.used/g.total):0.f;
+    setWidth(vramFill,std::max(1,int((VRAM_W-4)*frac)));
+    color(vramFill,frac>=.9f?COLORS[2]:frac>=.7f?COLORS[1]:FG);
+    char util[12]="--";
+    if(g.hasUtil) snprintf(util,sizeof(util),"%.0f%%",g.util);
+    if(g.hasVram) snprintf(buf,sizeof(buf),"%.1f / %.1f GB   GPU %s",g.used,g.total,util); else snprintf(buf,sizeof(buf),"GPU %s",util);
+    setText(vramText,buf);
+    unsigned shown=0,total=0;
+    for(size_t k=0;k<s.procCount;++k) if(s.procs[k].gpu==pg%s.gpuCount) ++total;
+    for(size_t k=0;k<s.procCount && shown<GPU_ROWS;++k) {
+        const auto &p=s.procs[k];
+        if(p.gpu!=pg%s.gpuCount) continue;
+        if(shown==GPU_ROWS-1 && total>GPU_ROWS) {   // last row: say how many did not fit
+            snprintf(buf,sizeof(buf),"+%u more",total-shown);
+            setText(cells[shown][0],""); setText(cells[shown][1],""); setText(cells[shown][2],""); setText(cells[shown][3],buf);
+            ++shown; break;
+        }
+        if(p.hasUsed) snprintf(buf,sizeof(buf),"%.2f GB",p.used); else snprintf(buf,sizeof(buf),"--");
+        setText(cells[shown][0],buf);
+        buf[0]=p.type; buf[1]=0; setText(cells[shown][1],buf);
+        setText(cells[shown][2],p.user); setText(cells[shown][3],p.command);
+        ++shown;
+    }
+    for(unsigned i=shown;i<GPU_ROWS;++i) for(int c=0;c<4;++c) setText(cells[i][c],"");
+}
 void build(const Telemetry &s,uint32_t now) {
     auto *screen=lv_scr_act(); lv_obj_clean(screen);
     lv_obj_set_style_bg_color(screen,lv_color_hex(BG),0); lv_obj_clear_flag(screen,LV_OBJ_FLAG_SCROLLABLE);
     memset(limitText,0,sizeof(limitText));
     page %= std::max(1u,uiPageCount(s));
+    if(listMode(mode)) {
+        visibleRows=0; buildList(screen);
+        contentSig=contentSignature(s); slowAt=now-SLOW_MS;
+        return;
+    }
     unsigned rowCount=rowsFor(mode);
     int rowHeight=mode==LayoutMode::Training?60:mode==LayoutMode::SleepingFooter?56:58;
     unsigned start=(page%sessionPages(s))*rowCount;
@@ -160,8 +257,10 @@ void build(const Telemetry &s,uint32_t now) {
         char prefix[32]; snprintf(prefix,sizeof(prefix),"%s (%s)",session.provider,session.profile);
         label(screen,12,y,prefix,F_TITLE);
         // Titles are static: truncated with an ellipsis, never scrolled.
-        titles[i]=label(screen,TITLE_X,y,session.title,F_TITLE);
-        lv_obj_set_size(titles[i],TITLE_W,lineH); lv_label_set_long_mode(titles[i],LV_LABEL_LONG_DOT);
+        // A long label ("Claude (tower)") pushes the title right instead of overlapping it.
+        int titleX=std::max(TITLE_X,12+int(lv_txt_get_width(prefix,strlen(prefix),F_TITLE,0,LV_TEXT_FLAG_NONE))+16);
+        titles[i]=label(screen,titleX,y,session.title,F_TITLE);
+        lv_obj_set_size(titles[i],TITLE_W-(titleX-TITLE_X),lineH); lv_label_set_long_mode(titles[i],LV_LABEL_LONG_DOT);
         auto *housing=rect(screen,780,i*rowHeight+(rowHeight-46)/2,24,46,LINE);
         for (int j=0;j<3;++j) lights[i][j]=rect(housing,6,5+j*13,12,10,DIM);
         lightState[i]=-1;
@@ -187,6 +286,7 @@ void build(const Telemetry &s,uint32_t now) {
         lv_obj_set_pos(dinoCanvas,20,216);
         dinoMark=label(screen,86,212,"",F_SMALL,DIM);
         runName=label(screen,110,204,"",F_SMALL,DIM);
+        lv_obj_set_size(runName,480,lv_font_get_line_height(F_SMALL)); lv_label_set_long_mode(runName,LV_LABEL_LONG_DOT);
         rect(screen,110,230,BAR_W,16,LINE); bar=rect(screen,112,232,1,12,FG);
         percent=label(screen,110+BAR_W+14,222,"",F_MAIN);
         metrics=label(screen,110,254,"",F_MAIN);
@@ -209,6 +309,8 @@ void build(const Telemetry &s,uint32_t now) {
 }
 unsigned uiPage(){return page+1;}
 unsigned uiPageCount(const Telemetry &s){
+    if(mode==LayoutMode::Overview) return std::max(1u,(unsigned(s.runCount)+LIST_ROWS-1)/LIST_ROWS);
+    if(mode==LayoutMode::Gpu) return std::max(1u,unsigned(s.gpuCount));
     unsigned pages=sessionPages(s);
     return mode==LayoutMode::Training?std::max(pages,unsigned(s.runCount)):pages;
 }
@@ -222,7 +324,7 @@ void uiSetMode(LayoutMode m,const Telemetry &s,uint32_t now){forced=true;mode=m;
 void uiAuto(const Telemetry &s,uint32_t now){forced=false;mode=autoMode(s);page=0;build(s,now);uiTick(s,now);}
 void uiTick(const Telemetry &s,uint32_t now) {
     if(!forced && mode!=autoMode(s)) {mode=autoMode(s);page=0;build(s,now);}
-    if(mode!=LayoutMode::FullSessions) drawDino(s,now);   // cheap: redraws only when a step changes
+    if(mode==LayoutMode::Training || mode==LayoutMode::SleepingFooter) drawDino(s,now);   // cheap: redraws only when a step changes
     if(uint32_t(now-slowAt)<SLOW_MS) return;
     slowAt=now;
     if(contentSignature(s)!=contentSig) { build(s,now); }   // sessions/runs changed: rebuild once
@@ -238,6 +340,8 @@ void uiTick(const Telemetry &s,uint32_t now) {
     char buf[100];
     snprintf(buf,sizeof(buf),"%u/%u",uiPage(),uiPageCount(s)); setText(pageLabel,uiPageCount(s)>1?buf:"");
     updateLimits(s);
+    if(mode==LayoutMode::Overview) { tickOverview(s,page%uiPageCount(s),now); return; }
+    if(mode==LayoutMode::Gpu) { tickGpu(s,page%uiPageCount(s)); return; }
     if(mode!=LayoutMode::Training) return;
     const unsigned runIdx=uiRun(s);
     const auto &r=s.runs[runIdx];

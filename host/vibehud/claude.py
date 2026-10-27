@@ -87,9 +87,8 @@ def _find_title(path: Path) -> str | None:
     return None
 
 class ClaudeCollector:
-    def __init__(self, home: Path | None = None, label: str | None = None, poll_usage: bool = True):
+    def __init__(self, home: Path | None = None, label: str | None = None):
         self.home = Path(home) if home else default_home()
-        self.poll_usage = poll_usage
         if label is None:
             email = account_email(self.home)
             label = email[0].upper() if email else "-"
@@ -138,7 +137,7 @@ class ClaudeCollector:
 
     def _poll_usage(self, now: float) -> None:
         """Refresh vibehud-limits.json from the usage endpoint unless the hook or an earlier poll did recently."""
-        if not self.poll_usage or now < self._next_poll:
+        if now < self._next_poll:
             return
         self._next_poll = now + POLL_EVERY
         target = limits_path(self.home)

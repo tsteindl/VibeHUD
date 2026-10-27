@@ -19,7 +19,7 @@ struct LossSeries {
     float v[LossHistory];
 };
 struct TrainingRun {
-    char id[16], name[40];
+    char id[16], name[64];
     RunState state;
     // Presence flags distinguish missing metrics from legitimate zero values.
     bool hasProgress, hasRate, hasEta, hasLoss, hasGpu, hasVram;
@@ -27,6 +27,19 @@ struct TrainingRun {
     uint32_t etaSeconds, lastUpdateMs;
     LossSeries train, val;   // val.count == 0 when there is no validation/test loss
     bool hasAcc; float acc;  // latest validation accuracy, percent
+};
+// GPUs of the machines the host reads (device-wide, nvidia-smi) and the processes using them.
+constexpr size_t MaxGpus = 4, MaxProcs = 40;
+struct GpuInfo {
+    char machine[16], name[32];
+    bool hasUtil, hasVram;
+    float util, used, total;   // percent, GB, GB
+};
+struct GpuProc {
+    uint8_t gpu;               // index into Telemetry::gpus
+    char type;                 // 'C' compute, 'G' graphics
+    bool hasUsed; float used;  // GB
+    char user[16], command[64];
 };
 // Subscription usage window (e.g. 5 hour and weekly limits).
 struct Limit {
@@ -41,6 +54,10 @@ struct Telemetry {
     size_t sessionCount;
     TrainingRun runs[MaxRuns];
     size_t runCount;
+    GpuInfo gpus[MaxGpus];
+    size_t gpuCount;
+    GpuProc procs[MaxProcs];   // largest first within each GPU
+    size_t procCount;
     Limit hourly, weekly;
 };
 void mockInit(Telemetry &state, uint32_t now);
