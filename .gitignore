@@ -1,6 +1,8 @@
-.tools/
+*.egg-info/
 .deps/
-build/
-__pycache__/
 .pio/
+.tools/
 .vscode/
+__pycache__/
+build/
+dist/

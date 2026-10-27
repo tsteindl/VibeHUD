@@ -116,7 +116,7 @@ def _macos(r: _Runner, remove: bool, extra: str) -> int:
         r.run(["launchctl", "bootout", target, str(plist_path)], check=False)
         r.delete(plist_path)
         return 0
-    plist = {"Label": "com.vibehud.agent", "ProgramArguments": [_python(), *_agent_args(extra)],
+    plist = {"Label": "com.vibehud.agent", "ProgramArguments": ["/usr/bin/caffeinate", "-s", _python(), *_agent_args(extra)],   # -s: no system sleep on AC, lid closed included
              "RunAtLoad": True, "KeepAlive": True, "StandardOutPath": str(LOG), "StandardErrorPath": str(LOG)}
     r.write(plist_path, plistlib.dumps(plist))
     r.run(["launchctl", "bootout", target, str(plist_path)], check=False)    # replace a previous version

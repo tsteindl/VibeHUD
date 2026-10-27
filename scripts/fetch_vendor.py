@@ -1,4 +1,4 @@
-import io, urllib.request, zipfile, pathlib
+import io, shutil, urllib.request, zipfile, pathlib
 URL = 'https://files.waveshare.com/wiki/ESP32-S3-LCD-3.16/ESP32-S3-LCD-3.16-Demo.zip'
 class Remote(io.RawIOBase):
     def __init__(self):
@@ -26,6 +26,7 @@ class Remote(io.RawIOBase):
             return data + self.read(n-len(data))
         self.pos += len(data)
         return data
+pathlib.Path('.tools').mkdir(exist_ok=True)
 with zipfile.ZipFile(Remote()) as z:
     names = z.namelist()
     pathlib.Path('.tools/archive-list.txt').write_text('\n'.join(names), encoding='utf-8')
@@ -35,3 +36,6 @@ with zipfile.ZipFile(Remote()) as z:
         if n.endswith('/'): continue
         z.extract(n,'.tools/vendor-extracted')
     print('Done',flush=True)
+# Install the LVGL 8.4.0 library the firmware builds against (platformio.ini: .deps/lvgl)
+shutil.copytree('.tools/vendor-extracted/ESP32-S3-LCD-3.16-Demo/Arduino/libraries/lvgl8', '.deps', dirs_exist_ok=True)
+shutil.copy('firmware/VibeHUD/lv_conf.h', '.deps/lv_conf.h')

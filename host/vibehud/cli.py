@@ -4,9 +4,7 @@ from pathlib import Path
 from .config import load_collectors
 from .claude import default_home as claude_home
 import dataclasses
-from .model import Limit, Snapshot, encode, snapshot_to_json, MAX_SESSIONS, RUNNING, STALLED, DONE, FAILED, QUEUED
-from .queue import QueueCollector
-from .tensorboard import TensorBoardCollector
+from .model import Limit, Snapshot, encode, MAX_SESSIONS, RUNNING, STALLED, DONE, FAILED, QUEUED
 
 RUN_ORDER = {RUNNING: 0, STALLED: 1, QUEUED: 2, DONE: 3, FAILED: 3}   # board page order
 
@@ -94,16 +92,10 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="vibehud", description="Feed the VibeHUD USB display.")
     ap.add_argument("--port", help="serial port (default: auto-detect the ESP32-S3 USB device)")
     ap.add_argument("--interval", type=float, default=1.0, help="seconds between snapshots")
-    ap.add_argument("--tensorboard", action="append", default=[], metavar="DIR",
-                    help="also watch TensorBoard logs under DIR (repeatable)")
-    ap.add_argument("--queue", action="append", default=[], metavar="FILE",
-                    help="also list planned runs from FILE (one run per line, name first; repeatable; ~/.vibehud/queue/ is always read)")
-    ap.add_argument("--total-steps", type=int, help="total training steps for --tensorboard runs (enables progress and ETA)")
     ap.add_argument("--once", action="store_true", help="print one snapshot and exit (no device needed)")
-    ap.add_argument("--json", action="store_true", help="print this machine's snapshot as JSON and exit (used for remote machines)")
     ap.add_argument("--install-autostart", action="store_true", help="start the agent at login (Windows, Linux, macOS)")
     ap.add_argument("--remove-autostart", action="store_true", help="undo --install-autostart")
-    ap.add_argument("--autostart-args", default="", metavar="ARGS", help='extra agent arguments for autostart, e.g. "--tensorboard ~/runs"')
+    ap.add_argument("--autostart-args", default="", metavar="ARGS", help="extra agent arguments for autostart")
     ap.add_argument("--force-autostart", action="store_true", help="install autostart even inside an ssh session")
     ap.add_argument("--dry-run", action="store_true", help="with --install/--remove-autostart: show what would be done")
     ap.add_argument("--log", metavar="FILE", help="append output to FILE instead of the console")
@@ -120,14 +112,13 @@ def main(argv=None) -> int:
     if args.install_claude_statusline or args.remove_claude_statusline:
         return install_statusline(claude_home(), remove=args.remove_claude_statusline)
     collectors = load_collectors()
-    collectors += [TensorBoardCollector([d], args.total_steps) for d in args.tensorboard]
-    if args.queue:
-        collectors.append(QueueCollector(args.queue))
-    if args.json or args.once:
+    if args.once:
         if any(hasattr(c, "last_error") for c in collectors):
-            time.sleep(8)                            # give remote threads a moment to fetch
+            deadline = time.time() + 30              # give remote threads time to connect and answer once
+            while time.time() < deadline and any(hasattr(c, "last_error") and c._snapshot is None and c.last_error is None for c in collectors):
+                time.sleep(0.5)
         snap = gather(collectors)
-        print(snapshot_to_json(snap) if args.json else describe(snap))
+        print(describe(snap))
         for c in collectors:                         # say why a remote is empty instead of staying silent
             if getattr(c, "last_error", None) or (hasattr(c, "last_error") and c._snapshot is None):
                 print(f"  remote '{c.label}': {c.last_error or 'no answer yet'}", file=sys.stderr)

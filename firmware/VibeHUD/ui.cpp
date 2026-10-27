@@ -143,7 +143,7 @@ void drawDino(const Telemetry &s,uint32_t now) {
         for(int sy=0;sy<scale;++sy) for(int sx=0;sx<scale;++sx)
             dinoBuffer[(y*scale+sy+lift)*width+x*scale+sx]=fg;
     lv_obj_invalidate(dinoCanvas);
-    lv_label_set_text(dinoMark,sleeping||state==RunState::Stalled||state==RunState::Queued?"z":state==RunState::Error?"!":state==RunState::Completed?"+":"");
+    lv_label_set_text(dinoMark,sleeping||state==RunState::Stalled?"z":state==RunState::Queued?"...":state==RunState::Error?"!":state==RunState::Completed?"+":"");
 }
 void build(const Telemetry &s,uint32_t now) {
     auto *screen=lv_scr_act(); lv_obj_clean(screen);
@@ -270,7 +270,8 @@ void uiTick(const Telemetry &s,uint32_t now) {
     if(r.hasGpu) snprintf(util,sizeof(util),"%.0f%%",r.gpu);
     if(r.hasVram) snprintf(vram,sizeof(vram),"   VRAM %.1f/%.0fG",r.vramUsed,r.vramTotal);
     snprintf(buf,sizeof(buf),"%s/s   ETA %s",rate,eta); setText(metrics,buf);
-    snprintf(buf,sizeof(buf),"GPU %s%s",util,vram); setText(gpu,buf);
+    if(r.hasGpu) snprintf(buf,sizeof(buf),"GPU %s%s",util,vram); else buf[0]=0;   // CPU-only runs: no GPU line
+    setText(gpu,buf);
     snprintf(buf,sizeof(buf),"loss %s",r.hasLoss?(loss[0]=='0'?loss+1:loss):"--"); setText(lossLabel,buf);
     if(r.val.count) { snprintf(buf,sizeof(buf),"val %.3f",r.val.v[r.val.count-1]); if(buf[4]=='0') memmove(buf+4,buf+5,strlen(buf+5)+1); }
     else buf[0]=0;

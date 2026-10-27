@@ -1,63 +1,108 @@
 """Remote machines (HPC login nodes, servers, VS Code Remote-SSH hosts) as data sources.
 
-Claude Code / Codex / training jobs that run on another computer leave their files THERE, not on the
-laptop the board is plugged into. So the same agent code runs on the remote as a one-shot
-`python3 -m vibehud --json`, which prints that machine's snapshot (its own sessions, limits and
-TensorBoard runs, using the remote's own ~/.vibehud/config.toml). The agent on the laptop fetches it
-over plain `ssh` (your keys and ~/.ssh/config, nothing stored by VibeHUD) every `interval` seconds
-in a background thread, so a slow or dead connection never stalls the 1 Hz display loop.
+Claude Code / Codex / training jobs that run on another computer leave their files THERE. Nothing is
+installed on that machine: over plain `ssh` (your keys and ~/.ssh/config) the agent starts the remote's own
+`python3` (3.9+) and sends it VibeHUD's source code on stdin, which runs from memory and touches no file. That
+process reads the remote's runs, queue, sessions and GPU and prints one JSON snapshot every few seconds; it
+ends when the ssh connection ends, so nothing is left behind.
 
-Remote requirements: Python 3.11+ and `pip install --user vibehud` (pure Python; pyserial is only
-imported when a board is attached). On Linux/macOS the SSH connection is multiplexed
-(ControlMaster/ControlPersist), so there is one login and many cheap polls; Windows' OpenSSH has
-no multiplexing, so key-based login (or an agent) is needed there.
+If the connection drops (a laptop waking from sleep, say) the process exits and is started again.
 """
 from __future__ import annotations
-import dataclasses, shlex, subprocess, sys, threading, time
+import base64, dataclasses, subprocess, sys, threading, time, zlib
+from pathlib import Path
 from ._proc import NO_WINDOW
-from .model import Limit, Run, Session, Snapshot, snapshot_from_json
+from .model import Limit, Run, Session, Snapshot, snapshot_from_json, snapshot_to_json
+
+INTERVAL = 5.0          # seconds between snapshots from the remote
+MAX_AGE = 60.0          # a snapshot older than this is not shown
+SKIP = {"device", "autostart", "__main__"}      # modules a remote does not need
+
+# Runs on the remote. SRC maps module names to source; the finder lets `import vibehud.x` read from it.
+BOOT = '''
+import importlib.abc, importlib.util, sys
+SRC = {src!r}
+class Finder(importlib.abc.MetaPathFinder, importlib.abc.Loader):
+    def find_spec(self, name, path=None, target=None):
+        if name in SRC:
+            return importlib.util.spec_from_loader(name, self, is_package=name == "vibehud")
+    def create_module(self, spec):
+        return None
+    def exec_module(self, module):
+        exec(compile(SRC[module.__name__], module.__name__, "exec"), module.__dict__)
+sys.meta_path.insert(0, Finder())
+from vibehud.remote import serve
+serve({runs!r}, {interval!r})
+'''
+
+def serve(runs, interval: float = INTERVAL):
+    """Remote side: print a snapshot every `interval` seconds until the ssh connection closes."""
+    import os
+    from .cli import gather
+    from .config import local_collectors
+    threading.Thread(target=lambda: (sys.stdin.read(), os._exit(0)), daemon=True).start()   # EOF = laptop is gone
+    collectors = local_collectors(runs, remote=True)
+    while True:
+        try:
+            print(snapshot_to_json(gather(collectors)), flush=True)
+        except OSError:
+            os._exit(0)
+        time.sleep(interval)
+
+def _boot_line(runs) -> bytes:
+    src = {("vibehud" if p.stem == "__init__" else f"vibehud.{p.stem}"): p.read_text("utf-8")
+           for p in Path(__file__).parent.glob("*.py") if p.stem not in SKIP}
+    code = BOOT.format(src=src, runs=list(runs), interval=INTERVAL)
+    return base64.b64encode(zlib.compress(code.encode())) + b"\n"
 
 class RemoteCollector:
     def __init__(self, host: str | None = None, label: str | None = None, python: str = "python3",
-                 args: str = "", interval: float = 15.0, command: list[str] | None = None, max_age: float = 90.0):
+                 runs=("~/runs",), command: list[str] | None = None):
         self.label = label or (host or "remote")
-        self.interval, self.max_age = interval, max_age
         if command is None:
-            options = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=8"]
-            if sys.platform != "win32":
-                options += ["-o", "ControlMaster=auto", "-o", "ControlPath=~/.ssh/vibehud-%C", "-o", "ControlPersist=10m"]
-            command = ["ssh", *options, host, f"{python} -m vibehud --json {args}".strip()]
-        self.command = command
+            options = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=8",
+                       "-o", "ServerAliveInterval=10", "-o", "ServerAliveCountMax=3"]    # dead link -> exit -> restart
+            command = ["ssh", *options, host,
+                       f'{python} -c "import sys,zlib,base64;exec(zlib.decompress(base64.b64decode(sys.stdin.readline())))"']
+        self.command, self.roots = command, runs
         self._snapshot: Snapshot | None = None
-        self._fetched = 0.0
+        self._received = 0.0
         self.last_error: str | None = None
         self._lock = threading.Lock()
         threading.Thread(target=self._loop, name=f"vibehud-remote-{self.label}", daemon=True).start()
 
     def _loop(self):
         while True:
-            started = time.time()
+            problem = "no output"
             try:
-                out = subprocess.run(self.command, capture_output=True, text=True, timeout=45, stdin=subprocess.DEVNULL, **NO_WINDOW)
-                if out.returncode != 0:
-                    raise RuntimeError((out.stderr.strip().splitlines() or [f"exit {out.returncode}"])[-1])
-                snapshot = snapshot_from_json(out.stdout)
-                with self._lock:
-                    recovered = self.last_error is not None or self._snapshot is None
-                    self._snapshot, self._fetched, self.last_error = snapshot, time.time(), None
-                if recovered:
-                    print(f"[vibehud] remote '{self.label}': connected", flush=True)
-            except Exception as e:                      # keep polling; the last good snapshot ages out
-                with self._lock:
-                    changed = str(e) != self.last_error
-                    self.last_error = str(e)
-                if changed:                             # logged once per distinct problem, not every poll
-                    print(f"[vibehud] remote '{self.label}': {e}", flush=True)
-            time.sleep(max(1.0, self.interval - (time.time() - started)))
+                proc = subprocess.Popen(self.command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                        stderr=subprocess.STDOUT, text=False, **NO_WINDOW)
+                proc.stdin.write(_boot_line(self.roots)); proc.stdin.flush()     # stdin stays open: closing it stops the remote
+                for raw in proc.stdout:
+                    line = raw.decode("utf-8", "replace").strip()
+                    try:
+                        snapshot = snapshot_from_json(line)
+                    except Exception:
+                        problem = line or problem                              # ssh or python error text
+                        continue
+                    with self._lock:
+                        recovered = self.last_error is not None or self._snapshot is None
+                        self._snapshot, self._received, self.last_error = snapshot, time.time(), None
+                    if recovered:
+                        print(f"[vibehud] remote '{self.label}': connected", flush=True)
+                problem = f"{problem} (exit {proc.wait()})"
+            except Exception as e:
+                problem = str(e)
+            with self._lock:
+                changed = problem != self.last_error
+                self.last_error = problem
+            if changed:                                  # logged once per distinct problem
+                print(f"[vibehud] remote '{self.label}': {problem}", flush=True)
+            time.sleep(10)
 
     def _current(self) -> Snapshot | None:
         with self._lock:
-            return self._snapshot if self._snapshot and time.time() - self._fetched <= self.max_age else None
+            return self._snapshot if self._snapshot and time.time() - self._received <= MAX_AGE else None
 
     def collect(self, now: float | None = None) -> tuple[list[Session], tuple[Limit, Limit]]:
         snap = self._current()

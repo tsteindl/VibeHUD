@@ -7,8 +7,9 @@ to it (buffered: PyTorch flushes every 120 s unless `flush_secs` is lowered). We
 we have read and decode only new records, with no tensorboard/protobuf/torch dependency, so the
 same code can run on a cluster login node.
 
-What event files do NOT contain: total steps (so progress/ETA need `total_steps`), GPU data, or
-whether the process is still alive (finished vs crashed vs hung is guessed from file age).
+What event files do NOT contain: total steps (progress/ETA need a `vibehud/total_steps` scalar, plain
+`writer.add_scalar`), GPU data (read from this machine's nvidia-smi instead), or whether the process is
+still alive (finished vs crashed vs hung is guessed from file age).
 """
 from __future__ import annotations
 import struct, time, zlib
@@ -16,10 +17,11 @@ from pathlib import Path
 from . import gpu
 from .model import Limit, Run, RUNNING, STALLED, DONE, MAX_LOSS
 
-RECENT_HOURS = 6
+RECENT_HOURS = 3 * 24        # long runs (a day or more) must not push out the runs that finished before them
 STALL_AFTER = 150            # seconds without new events before a run counts as stalled
 FINISHED_AFTER = 30 * 60     # seconds without new events before a run counts as finished
 MAX_POINTS = 4000
+TAG_TOTAL_STEPS = "vibehud/total_steps"
 
 # ---- minimal protobuf / TFRecord decoding -------------------------------------------------
 
@@ -146,12 +148,9 @@ def to_bins(points, lo_step: int, hi_step: int, bins: int = MAX_LOSS) -> list[li
     return [[b, total / n] for b, (total, n) in sorted(sums.items())]
 
 class TensorBoardCollector:
-    def __init__(self, roots, total_steps: int | None = None, recent_hours: float = RECENT_HOURS,
-                 use_local_gpu: bool = True):
-        self.use_local_gpu = use_local_gpu
+    def __init__(self, roots, recent_hours: float = RECENT_HOURS):
         self._gpu_cache: tuple[float, tuple | None] = (0.0, None)
         self.roots = [Path(r).expanduser() for r in roots]
-        self.total_steps = total_steps
         self.recent = recent_hours * 3600
         self._files: dict[Path, _Tracked] = {}
 
@@ -164,6 +163,8 @@ class TensorBoardCollector:
         newest: dict[Path, tuple[float, Path]] = {}      # one run per directory: its newest file
         for root in self.roots:
             for path in root.rglob("events.out.tfevents.*"):
+                if path.suffix == ".csv":                  # exports next to the real event files
+                    continue
                 try:
                     mtime = path.stat().st_mtime
                 except OSError:
@@ -212,8 +213,8 @@ class TensorBoardCollector:
         if len(window) >= 2 and window[-1][1] > window[0][1] and window[-1][0] > window[0][0]:
             rate = (window[-1][0] - window[0][0]) / (window[-1][1] - window[0][1])
         age = now - mtime
-        declared = tracked.series.get(gpu.TAG_TOTAL_STEPS)       # logged by vibehud.gpu.start_logging(total_steps=N)
-        total = int(declared[-1][2]) if declared else self.total_steps
+        declared = tracked.series.get(TAG_TOTAL_STEPS)
+        total = int(declared[-1][2]) if declared else None
         state = RUNNING if age <= STALL_AFTER else STALLED if age <= FINISHED_AFTER else DONE
         if total and step >= total:
             state = DONE
@@ -231,13 +232,8 @@ class TensorBoardCollector:
             run.progress = min(1.0, step / total)
             if rate and state == RUNNING:
                 run.eta_s = int(max(0, total - step) / rate)
-        def latest(tag):
-            points = tracked.series.get(tag)
-            return points[-1][2] if points else None
-        run.gpu, run.vram_used, run.vram_total = latest(gpu.TAG_UTIL), latest(gpu.TAG_USED), latest(gpu.TAG_TOTAL)
-        if run.gpu is None and state == RUNNING and self.use_local_gpu:
-            # The script did not log GPU tags: use this machine's GPU (right for local single-job use).
-            reading = self._local_gpu(now)
+        if state == RUNNING:
+            reading = self._local_gpu(now)         # this machine's GPU, device-wide: not only this run's share
             if reading:
                 run.gpu, run.vram_used, run.vram_total = reading
         accuracy = [t for t in training if "acc" in t.lower() and any(w in t.lower() for w in VAL_WORDS)]
