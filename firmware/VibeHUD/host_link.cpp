@@ -72,7 +72,7 @@ void HostLink::handleLine(char *text, Telemetry &live, uint32_t now) {
         copy(p.command, sizeof(p.command), f[5]);
     } else if (!strcmp(f[0], "END")) {
         live = stage; stage.linked = false;
-        lastSnapshotMs = now; everLinked = true;
+        lastSnapshotMs = now; everLinked = true; ++snapshots;
     }
 }
 char HostLink::feed(int c, Telemetry &live, uint32_t now) {

@@ -34,7 +34,7 @@ void setMode(LayoutMode m,uint32_t now) {
     Serial.printf("MODE %d PAGE %u/%u\n",int(m),uiPage(),uiPageCount(telemetry));
 }
 void setup() {
-    Serial.setRxBufferSize(8192);   // a full snapshot is a few KB
+    Serial.setRxBufferSize(49152);   // a snapshot is ~10 KB (up to ~32 KB with 24 runs) and arrives in one USB burst while the loop may be rendering
     Serial.begin(115200);
     lvgl_port_init();
     lcd_bl_pwm_bsp_init(LCD_PWM_MODE_150);
@@ -79,7 +79,7 @@ void loop() {
         example_lvgl_unlock();
     }
     if(uint32_t(now-lastLog)>=5000) {
-        Serial.printf("HUD alive ms=%lu page=%u/%u mode=%d run=%d free=%u\n",(unsigned long)now,uiPage(),uiPageCount(telemetry),int(uiMode()),int(telemetry.runCount?telemetry.runs[uiRun(telemetry)].state:RunState::Stalled),ESP.getFreeHeap());lastLog=now;
+        Serial.printf("HUD alive ms=%lu page=%u/%u mode=%d run=%d free=%u snapshots=%lu\n",(unsigned long)now,uiPage(),uiPageCount(telemetry),int(uiMode()),int(telemetry.runCount?telemetry.runs[uiRun(telemetry)].state:RunState::Stalled),ESP.getFreeHeap(),(unsigned long)hostLink.snapshotCount());lastLog=now;
     }
     delay(5);
 }

@@ -21,6 +21,7 @@ class HostLink {
     Telemetry stage;
     uint32_t lastSnapshotMs = 0;
     bool everLinked = false;
+    uint32_t snapshots = 0;
     void handleLine(char *text, Telemetry &live, uint32_t now);
 public:
     // Returns 0 when the byte was consumed as protocol, otherwise the command character.
@@ -28,4 +29,5 @@ public:
     // Drops back to the "waiting for host" state when snapshots stop arriving.
     bool expire(Telemetry &live, uint32_t now, uint32_t timeoutMs = 10000);
     bool receivedAny() const { return everLinked; }
+    uint32_t snapshotCount() const { return snapshots; }
 };
