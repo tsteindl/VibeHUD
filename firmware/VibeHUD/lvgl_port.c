@@ -142,8 +142,10 @@ static esp_lcd_panel_handle_t rgb_port_init(void)
   rgb_config.timings.pclk_hz = 18 * 1000 * 1000;
   rgb_config.timings.h_res = EXAMPLE_LCD_H_RES;
   rgb_config.timings.v_res = EXAMPLE_LCD_V_RES;
-  rgb_config.timings.hsync_back_porch = 30;
-  rgb_config.timings.hsync_front_porch = 30;  //30
+  // Waveshare's 30/30 left white specks on bright text at the start of each panel line (the top
+  // edge in landscape); 60/60 gives the panel's source drivers more time per line. ~45 fps at 18 MHz.
+  rgb_config.timings.hsync_back_porch = 60;
+  rgb_config.timings.hsync_front_porch = 60;
   rgb_config.timings.hsync_pulse_width = 6;
   rgb_config.timings.vsync_back_porch = 20;
   rgb_config.timings.vsync_front_porch = 20;
