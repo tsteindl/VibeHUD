@@ -8,12 +8,15 @@
 #define F_MAIN  (&lv_font_montserrat_24)
 #define F_LIMIT (&lv_font_montserrat_20)
 #define F_SMALL (&lv_font_montserrat_16)
+// Rate/ETA/percent line: "123.4/s  ETA 23h59m, 99%" must end before the loss plot at x=396; 24 px does not fit.
+#define F_METRIC (&lv_font_montserrat_22)
 namespace {
-constexpr uint32_t BG=0x101810, FG=0xdbe5c6, DIM=0x65745b, LINE=0x334130, VAL=0x6fb4ec;   // VAL: validation/test loss
+constexpr uint32_t BG=0x101810, FG=0xdbe5c6, DIM=0x65745b, LINE=0x334130, VAL=0x6fb4ec, UNLIT=0x243020;   // VAL: validation/test loss
 constexpr uint32_t COLORS[]={0x79dd77,0xf0cb58,0xe97165};
 constexpr int TITLE_X=196, TITLE_W=572, SPARK_W=188, SPARK_H=30, PANEL_X=608, PANEL_BAR_W=200, BAR_W=270;
 // Display work is kept sparse: data text refreshes at 1 Hz, the dino steps at 3 Hz.
-constexpr uint32_t SLOW_MS=1000, DINO_FRAME_MS=333;
+// A session that needs you flashes its amber lamp like a traffic signal: 1 Hz, half the time on.
+constexpr uint32_t SLOW_MS=1000, DINO_FRAME_MS=333, BLINK_MS=500;
 constexpr int HOP=6;   // px the running dino lifts on alternate steps
 LayoutMode mode=LayoutMode::Training;
 bool forced=false;
@@ -27,6 +30,7 @@ lv_obj_t *header, *cells[LIST_ROWS][4], *marks[LIST_ROWS], *vramFill, *vramText;
 lv_color_t dinoBuffer[64*78];
 lv_point_t sparkPoints[LossHistory], sparkValPoints[LossHistory];
 int limitBarW=90, lightState[5];
+bool blinkLit=true;
 unsigned visibleRows=0;
 uint32_t dinoKey=~0u, contentSig=0;
 int sparkRun=-1; float sparkLast=-1.f, sparkValLast=-1.f; unsigned sparkCount=0, sparkValCount=0;
@@ -297,8 +301,8 @@ void build(const Telemetry &s,uint32_t now) {
         runName=label(screen,110,204,"",F_SMALL,DIM);
         lv_obj_set_size(runName,480,lv_font_get_line_height(F_SMALL)); lv_label_set_long_mode(runName,LV_LABEL_LONG_DOT);
         rect(screen,110,230,BAR_W,16,LINE); bar=rect(screen,112,232,1,12,FG);
-        percent=label(screen,110+BAR_W+14,222,"",F_MAIN);
-        metrics=label(screen,110,254,"",F_MAIN);
+        metrics=label(screen,110,254,"",F_METRIC);
+        percent=label(screen,110,254,"",F_METRIC);   // same line, right after the ETA: uiTick sets its x
         gpu=label(screen,110,292,"",F_SMALL,DIM);
         spark=lv_line_create(screen); lv_obj_set_pos(spark,396,260);
         lv_obj_set_style_line_width(spark,2,0); lv_obj_set_style_line_color(spark,lv_color_hex(FG),0);
@@ -334,6 +338,12 @@ void uiAuto(const Telemetry &s,uint32_t now){forced=false;mode=autoMode(s);page=
 void uiTick(const Telemetry &s,uint32_t now) {
     if(!forced && mode!=autoMode(s)) {mode=autoMode(s);page=0;build(s,now);}
     if(mode==LayoutMode::Training || mode==LayoutMode::SleepingFooter) drawDino(s,now);   // cheap: redraws only when a step changes
+    const bool lit=(now/BLINK_MS)%2==0;
+    if(lit!=blinkLit) {
+        blinkLit=lit;
+        for(unsigned i=0;i<visibleRows;++i)   // amber is the centre lamp
+            if(lightState[i]==int(SessionStatus::NeedsUser)) color(lights[i][1],lit?COLORS[1]:UNLIT);
+    }
     if(uint32_t(now-slowAt)<SLOW_MS) return;
     slowAt=now;
     if(contentSignature(s)!=contentSig) { build(s,now); }   // sessions/runs changed: rebuild once
@@ -344,7 +354,8 @@ void uiTick(const Telemetry &s,uint32_t now) {
         if(status==lightState[i]) continue;
         lightState[i]=status;
         // Red at top, amber center, green bottom: position reinforces color.
-        for(int j=0;j<3;++j) color(lights[i][j],j==2-status?COLORS[status]:0x243020);
+        const bool on=status!=int(SessionStatus::NeedsUser) || blinkLit;
+        for(int j=0;j<3;++j) color(lights[i][j],j==2-status && on?COLORS[status]:UNLIT);
     }
     char buf[100];
     snprintf(buf,sizeof(buf),"%u/%u",uiPage(),uiPageCount(s)); setText(pageLabel,uiPageCount(s)>1?buf:"");
@@ -364,10 +375,10 @@ void uiTick(const Telemetry &s,uint32_t now) {
     // Unknown progress shows an empty bar and "--%": no indeterminate animation.
     setWidth(bar,r.hasProgress?std::max(1,int((BAR_W-4)*progress)):1);
     snprintf(buf,sizeof(buf),"%d%%",int(progress*100));
-    setText(percent,r.state==RunState::Error?"ERROR":r.state==RunState::Completed?"DONE":queued?"QUEUED":stale?"STALE":r.hasProgress?buf:"--%");
+    setText(percent,r.state==RunState::Error?"ERROR":r.state==RunState::Completed?"DONE":queued?"":stale?"STALE":r.hasProgress?buf:"--%");
     lv_obj_set_style_text_color(percent,lv_color_hex(ink),0);
     if(queued) {
-        // A planned run has no metrics: show its place in the queue and clear everything else.
+        // A planned run has no metrics or percentage: show its place in the queue and clear everything else.
         unsigned position=0;
         for(unsigned i=0;i<=runIdx;++i) if(s.runs[i].state==RunState::Queued) ++position;
         if(position==1) snprintf(buf,sizeof(buf),"next up"); else snprintf(buf,sizeof(buf),"#%u in queue",position);
@@ -382,7 +393,9 @@ void uiTick(const Telemetry &s,uint32_t now) {
     if(r.hasLoss) snprintf(loss,sizeof(loss),"%.3f",r.loss);
     if(r.hasGpu) snprintf(util,sizeof(util),"%.0f%%",r.gpu);
     if(r.hasVram) snprintf(vram,sizeof(vram),"   VRAM %.1f/%.0fG",r.vramUsed,r.vramTotal);
-    snprintf(buf,sizeof(buf),"%s/s   ETA %s",rate,eta); setText(metrics,buf);
+    snprintf(buf,sizeof(buf),"%s/s  ETA %s, ",rate,eta); setText(metrics,buf);
+    // The percentage (or state) is its own label so it keeps the state colour; it starts where this text ends.
+    lv_obj_set_x(percent,110+lv_txt_get_width(buf,strlen(buf),F_METRIC,0,LV_TEXT_FLAG_NONE));
     if(r.hasGpu) snprintf(buf,sizeof(buf),"GPU %s%s",util,vram); else buf[0]=0;   // CPU-only runs: no GPU line
     setText(gpu,buf);
     snprintf(buf,sizeof(buf),"loss %s",r.hasLoss?(loss[0]=='0'?loss+1:loss):"--"); setText(lossLabel,buf);
